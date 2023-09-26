@@ -241,7 +241,7 @@ class Node(
                     if (xsearch.isEmpty()) continue
                     for (node in nds) {
                         xn = node
-                        var p = xsearch.indexOf(xn.tail.toChar())
+                        var p = xsearch.indexOf(xn.tail)
                         if (p < 0) {
                             if (xn.tail == '/') {
                                 p = xsearch.length
