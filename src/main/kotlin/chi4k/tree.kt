@@ -169,7 +169,7 @@ fun patNextSegment(pattern: String): SegmentDetails {
     val ws = pattern.indexOf("*")
 
     if (ps < 0 && ws < 0) {
-        return SegmentDetails(NodeTyp.NT_STATIC, "", "", '/', 0, pattern.length)
+        return SegmentDetails(NodeTyp.NT_STATIC, "", "", Char(0), 0, pattern.length)
     }
 
     if (ps >= 0 && ws >= 0 && ws < ps) {
@@ -180,12 +180,13 @@ fun patNextSegment(pattern: String): SegmentDetails {
 
     if (ps >= 0) {
         // Param/Regexp pattern is next
-        var type = NodeTyp.NT_PARAM
-        var pe = ps
+        var nt = NodeTyp.NT_PARAM
         var cc = 0
+        var pe = ps
         for ((i, c) in pattern.substring(ps).withIndex()) {
-            if (c == '{') cc++
-            else if (c == '}') {
+            if (c == '{') {
+                cc++
+            } else if (c == '}') {
                 cc--
                 if (cc == 0) {
                     pe = ps + i
@@ -207,7 +208,7 @@ fun patNextSegment(pattern: String): SegmentDetails {
 
         var regex = ""
         if (key.contains(":")) {
-            type = NodeTyp.NT_REGEXP
+            nt = NodeTyp.NT_REGEXP
             regex = key.substringAfter(":")
             key = key.substringBefore(":")
         }
@@ -217,14 +218,14 @@ fun patNextSegment(pattern: String): SegmentDetails {
             if (!regex.endsWith('$')) regex += "$"
         }
 
-        return SegmentDetails(type, key, regex, tail, ps, pe)
+        return SegmentDetails(nt, key, regex, tail, ps, pe)
     }
 
     // Wildcard pattern as finale
     if (ws < pattern.length - 1) {
         throw IllegalArgumentException("Wildcard '*' must be the last value in a route. trim trailing text or use a '{param}' instead")
     }
-    return SegmentDetails(NodeTyp.NT_CATCH_ALL, "*", "", '/', ws, pattern.length)
+    return SegmentDetails(NodeTyp.NT_CATCH_ALL, "*", "", Char(0), ws, pattern.length)
 }
 
 fun patParamKeys(pattern: String): List<String> {

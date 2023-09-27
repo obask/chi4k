@@ -2,11 +2,11 @@ package chi4k
 
 data class RouteParams(
     var keys: MutableList<String> = ArrayList(),
-    var values: MutableList<String> = ArrayList()
+    var values: MutableList<String> = ArrayList(),
 ) {
     fun add(key: String, value: String) {
         keys.add(key)
-        this.values.add(value)
+        values.add(value)
     }
 }
 

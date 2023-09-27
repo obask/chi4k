@@ -16,87 +16,15 @@ class Node(
         return endpoints.getOrPut(method) { Endpoint() }
     }
 
-    fun insertRoute(method: MethodTyp, pattern: String, handler: HttpHandler): Node {
-        var parent: Node? = null
-        var search = pattern
-
-        while (true) {
-            // Handle key exhaustion
-            if (search.isEmpty()) {
-                // Insert or update the node's leaf handler
-                this.setEndpoint(method, handler, pattern)
-                return this
-            }
-
-            // We're going to be searching for a wild node next
-            val label = search[0]
-            val (segTyp, _, segRexpat, segTail, _, segEndIdx) = if (label == '{' || label == '*') {
-                patNextSegment(search)
-            } else {
-                SegmentDetails(NodeTyp.NT_STATIC, "", "", Char(0), 0, 0)
-            }
-
-            val prefix = if (segTyp == NodeTyp.NT_REGEXP) segRexpat else ""
-
-            // Look for the edge to attach to
-            parent = this
-            val n = this.getEdge(segTyp, label, segTail, prefix)
-
-            // No edge, create one
-            if (n == null) {
-                val child = Node(label = label, tail = segTail, prefix = search)
-                val hn = parent.addChild(child, search)
-                hn.setEndpoint(method, handler, pattern)
-                return hn
-            }
-
-            // Found an edge to match the pattern
-            if (n.typ > NodeTyp.NT_STATIC) {
-                // We found a param node, trim the param from the search path and continue.
-                search = search.substring(segEndIdx)
-                continue
-            }
-
-            // Static nodes fall below here.
-            val commonPrefix = longestPrefix(search, n.prefix)
-            if (commonPrefix == n.prefix.length) {
-                // the common prefix is as long as the current node's prefix we're attempting to insert.
-                search = search.substring(commonPrefix)
-                continue
-            }
-
-            // Split the node
-            val child = Node(typ = NodeTyp.NT_STATIC, prefix = search.substring(0, commonPrefix))
-            parent.replaceChild(search[0], segTail, child)
-
-            // Restore the existing node
-            n.label = n.prefix[commonPrefix]
-            n.prefix = n.prefix.substring(commonPrefix)
-            child.addChild(n, n.prefix)
-
-            // If the new key is a subset, set the method/handler on this node and finish.
-            search = search.substring(commonPrefix)
-            if (search.isEmpty()) {
-                child.setEndpoint(method, handler, pattern)
-                return child
-            }
-
-            // Create a new edge for the node
-            val subchild = Node(typ = NodeTyp.NT_STATIC, label = search[0], prefix = search)
-            val hn = child.addChild(subchild, search)
-            hn.setEndpoint(method, handler, pattern)
-            return hn
-        }
-    }
-
 
     fun addChild(child: Node, prefix: String): Node {
         var search = prefix
         var hn = child
 
         // Parse next segment
-        val (segTyp, _, segRexpat, segTail, segStartIdx, segEndIdx) = patNextSegment(search)
+        val (segTyp, _, segRexpat, segTail, segStartIdx1, segEndIdx) = patNextSegment(search)
 
+        var segStartIdx = segStartIdx1
         // Add child depending on next up segment
         when (segTyp) {
             NodeTyp.NT_STATIC -> {
@@ -110,37 +38,44 @@ class Node(
                     child.rex = rex
                 }
 
-                when {
-                    segStartIdx == 0 -> {
-                        child.typ = segTyp
-                        if (segTyp != NodeTyp.NT_CATCH_ALL) {
-                            search = search.substring(segEndIdx)
-                        } else {
-                            search = ""
-                        }
-                        child.tail = segTail
-
-                        if (search.isNotEmpty()) {
-                            val nn = Node(typ = NodeTyp.NT_STATIC, label = search[0], prefix = search)
-                            hn = child.addChild(nn, search)
-                        }
+                if (segStartIdx == 0) {
+                    // Route starts with a param
+                    child.typ = segTyp
+                    segStartIdx = if (segTyp != NodeTyp.NT_CATCH_ALL) {
+                        -1
+                    } else {
+                        segEndIdx
                     }
+                    if (segStartIdx < 0) {
+                        segStartIdx = search.length
+                    }
+                    child.tail = segTail
+                    if (segStartIdx != search.length) {
+                        // add static edge for the remaining part, split the end.
+                        // its not possible to have adjacent param nodes, so its certainly
+                        // going to be a static node next.
 
-                    else -> {
-                        child.typ = NodeTyp.NT_STATIC
-                        child.prefix = search.substring(0, segStartIdx)
-                        child.rex = null
+                        search = search.substring(segStartIdx) // advance search position
 
-                        search = search.substring(segStartIdx)
-                        val nn = Node(typ = segTyp, label = search[0], tail = segTail)
+                        val nn = Node(typ = NodeTyp.NT_STATIC, label = search[0], prefix = search)
                         hn = child.addChild(nn, search)
                     }
                 }
+                else if (segStartIdx > 0) {
+                    child.typ = NodeTyp.NT_STATIC
+                    child.prefix = search.substring(0, segStartIdx)
+                    child.rex = null
+
+                    search = search.substring(segStartIdx)
+                    val nn = Node(typ = segTyp, label = search[0], tail = segTail)
+                    hn = child.addChild(nn, search)
+                }
+                else TODO()
             }
         }
 
-        this.children[segTyp]?.add(child)
-        this.children[segTyp]?.xSort() // Assumes nodes have a natural order
+        this.children[child.typ]?.add(child)
+        this.children[child.typ]?.xSort() // Assumes nodes have a natural order
         return hn
     }
 
@@ -178,21 +113,21 @@ class Node(
             endpoints.value(MethodTyp.mSTUB).handler = handler // Assuming value function exists in Endpoints
         }
 //        if (true) {
-        val h = endpoints.value(MethodTyp.mALL)
+//        val h = endpoints.value(MethodTyp.mALL)
+//        h.handler = handler
+//        h.pattern = pattern
+//        h.paramKeys = paramKeys
+//        for (m in methodMap.values) { // Assuming methodMap exists
+//            val h1 = endpoints.value(m)
+//            h1.handler = handler
+//            h1.pattern = pattern
+//            h1.paramKeys = paramKeys
+//        }
+//        } else {
+        val h = endpoints.value(method)
         h.handler = handler
         h.pattern = pattern
         h.paramKeys = paramKeys
-        for (m in methodMap.values) { // Assuming methodMap exists
-            val h1 = endpoints.value(m)
-            h1.handler = handler
-            h1.pattern = pattern
-            h1.paramKeys = paramKeys
-        }
-//        } else {
-//            val h = endpoints.value(method)
-//            h.handler = handler
-//            h.pattern = pattern
-//            h.paramKeys = paramKeys
     }
 
     fun findRoute(
@@ -234,13 +169,13 @@ class Node(
                 NodeTyp.NT_STATIC -> {
                     xn = nodesFindEdge(nds, label)
                     if (xn == null || !xsearch.startsWith(xn.prefix)) continue
-                    xsearch = xsearch.drop(xn.prefix.length)
+                    xsearch = xsearch.substring(xn.prefix.length)
                 }
 
                 NodeTyp.NT_PARAM, NodeTyp.NT_REGEXP -> {
                     if (xsearch.isEmpty()) continue
-                    for (node in nds) {
-                        xn = node
+                    for (idx in nds.indices) {
+                        xn = nds[idx]
                         var p = xsearch.indexOf(xn.tail)
                         if (p < 0) {
                             if (xn.tail == '/') {
@@ -262,30 +197,11 @@ class Node(
 
                         val prevLen = rctx.routeParams.values.size
                         rctx.routeParams.values.add(xsearch.substring(0, p))
-                        xsearch = xsearch.drop(p)
-                        if (xsearch.isEmpty()) {
-                            if (xn.children.isEmpty()) {
-                                val h = xn.endpoints[method]
-                                if (h?.handler != null) {
-                                    rctx.routeParams.keys.addAll(h.paramKeys)
-                                    return xn
-                                }
-
-                                for (endpoint in xn.endpoints.keys) {
-                                    if ( endpoint == MethodTyp.mSTUB) {
-                                        continue
-                                    }
-                                    rctx.methodsAllowed.add(endpoint)
-                                    TODO()
-                                }
-
-                                // Flag that the routing context found a route, but not a corresponding supported method
-                                rctx.methodNotAllowed = true
-                            }
-                        }
+                        xsearch = xsearch.substring(p)
+                        if (didWeFindItYet(xsearch, xn, method, rctx)) return xn
 
                         // Recursively find the next node on this branch
-                        val (fin, _, _) = xn.findRoute(rctx, method, xsearch)
+                        val fin = xn.findRouteImpl(rctx, method, xsearch)
                         if (fin != null) {
                             return fin
                         }
@@ -294,7 +210,7 @@ class Node(
                         rctx.routeParams.values = rctx.routeParams.values.subList(0, prevLen).toMutableList()
                         xsearch = search
                     }
-                    rctx.routeParams.values.add("")
+                    rctx.routeParams.values += ""
                 }
                 // ... (continuation for other cases)
                 NodeTyp.NT_CATCH_ALL -> {
@@ -307,33 +223,16 @@ class Node(
             val xn1 = xn ?: continue
 
             // Did we find it yet?
-            if (xsearch.isEmpty()) {
-                if (xn1.children.isNotEmpty()) {
-                    val h = xn1.endpoints[method]
-                    if (h?.handler != null) {
-                        rctx.routeParams.keys.addAll(h.paramKeys)
-                        return xn
-                    }
-
-                    for (endpoint in xn1.endpoints.keys) {
-                        if (endpoint == MethodTyp.mSTUB) continue
-                        rctx.methodsAllowed.add(endpoint)
-                        TODO()
-                    }
-
-                    // Flag that the routing context found a route, but not a corresponding supported method
-                    rctx.methodNotAllowed = true
-                }
-            }
+            if (didWeFindItYet(xsearch, xn1, method, rctx)) return xn1
 
             // Recursively find the next node
-            val (fin, _, _) = xn1.findRoute(rctx, method, xsearch)
+            val fin = xn1.findRouteImpl(rctx, method, xsearch)
             if (fin != null) {
                 return fin
             }
 
             // Didn't find the final handler, remove the param here if it was set
-            if (xn1.typ > NodeTyp.NT_STATIC) {
+            if (xn1.typ != NodeTyp.NT_STATIC) {
                 if (rctx.routeParams.values.isNotEmpty()) {
                     rctx.routeParams.values.removeAt(rctx.routeParams.values.size - 1)
                 }
@@ -341,6 +240,28 @@ class Node(
         }
 
         return null
+    }
+
+    private fun didWeFindItYet(xsearch: String, xn: Node, method: MethodTyp, rctx: Context): Boolean {
+        if (xsearch.isNotEmpty()) return false
+        if (xn.endpoints.isEmpty()) return false
+        val h = xn.endpoints[method]
+        if (h?.handler != null) {
+            rctx.routeParams.keys.addAll(h.paramKeys)
+            return true
+        }
+
+        for (endpoint in xn.endpoints.keys) {
+            if (endpoint == MethodTyp.mSTUB) {
+                continue
+            }
+            rctx.methodsAllowed.add(endpoint)
+            TODO()
+        }
+
+        // Flag that the routing context found a route, but not a corresponding supported method
+        rctx.methodNotAllowed = true
+        return false
     }
 
 
@@ -458,6 +379,82 @@ class Node(
             }
         }
         return false
+    }
+
+    companion object {
+        fun insertRoute(node: Node, method: MethodTyp, pattern: String, handler: HttpHandler): Node? {
+            var n: Node? = node
+            var parent: Node? = null
+            var search = pattern
+
+            while (true) {
+                // Handle key exhaustion
+                if (search.isEmpty()) {
+                    // Insert or update the node's leaf handler
+                    n?.setEndpoint(method, handler, pattern)
+                    return n
+                }
+
+                // We're going to be searching for a wild node next
+                val label = search[0]
+                val (segTyp, _, segRexpat, segTail, _, segEndIdx) = if (label == '{' || label == '*') {
+                    patNextSegment(search)
+                } else {
+                    SegmentDetails(NodeTyp.NT_STATIC, "", "", Char(0), 0, 0)
+                }
+
+                val prefix = if (segTyp == NodeTyp.NT_REGEXP) segRexpat else ""
+
+                // Look for the edge to attach to
+                parent = n
+                n = n?.getEdge(segTyp, label, segTail, prefix)
+
+                // No edge, create one
+                if (n == null) {
+                    val child = Node(label = label, tail = segTail, prefix = search)
+                    val hn = parent!!.addChild(child, search)
+                    hn.setEndpoint(method, handler, pattern)
+                    return hn
+                }
+
+                // Found an edge to match the pattern
+                if (n.typ > NodeTyp.NT_STATIC) {
+                    // We found a param node, trim the param from the search path and continue.
+                    search = search.substring(segEndIdx)
+                    continue
+                }
+
+                // Static nodes fall below here.
+                val commonPrefix = longestPrefix(search, n.prefix)
+                if (commonPrefix == n.prefix.length) {
+                    // the common prefix is as long as the current node's prefix we're attempting to insert.
+                    search = search.substring(commonPrefix)
+                    continue
+                }
+
+                // Split the node
+                val child = Node(typ = NodeTyp.NT_STATIC, prefix = search.substring(0, commonPrefix))
+                parent!!.replaceChild(search[0], segTail, child)
+
+                // Restore the existing node
+                n.label = n.prefix[commonPrefix]
+                n.prefix = n.prefix.substring(commonPrefix)
+                child.addChild(n, n.prefix)
+
+                // If the new key is a subset, set the method/handler on this node and finish.
+                search = search.substring(commonPrefix)
+                if (search.isEmpty()) {
+                    child.setEndpoint(method, handler, pattern)
+                    return child
+                }
+
+                // Create a new edge for the node
+                val subchild = Node(typ = NodeTyp.NT_STATIC, label = search[0], prefix = search)
+                val hn = child.addChild(subchild, search)
+                hn.setEndpoint(method, handler, pattern)
+                return hn
+            }
+        }
     }
 
 }
